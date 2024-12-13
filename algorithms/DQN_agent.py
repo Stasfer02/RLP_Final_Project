@@ -2,8 +2,7 @@
 The DQN network
 """
 import tensorflow as tf
-import keras
-from keras import layers,models
+from tensorflow.keras import layers, models, optimizers
 from typing import List, Tuple
 
 class DQN:
