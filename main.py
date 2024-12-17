@@ -1,5 +1,7 @@
 """
-Main file
+Main file.
+
+Here, we initialize the (wrapped) Environment, DQN agent and perform the training loop.
 """
 import numpy as np
 import matplotlib as plt
@@ -7,25 +9,18 @@ import matplotlib as plt
 import gymnasium as gym
 import minigrid
 
-from algorithms.DQN_agent import DQN
-from algorithms.NGU_system import NGU
-
+from stable_baselines3 import DQN
+from algorithms.NGU_system import NGU_env_wrapper
 
 def main():
 
     env = gym.make('MiniGrid-Empty-16x16-v0')
-    # Dict('direction': Discrete(4), 'image': Box(0, 255, (7, 7, 3), uint8), 'mission': MissionSpace(<function EmptyEnv._gen_mission at 0x161d813a0>, None))
-    state_shape = env.observation_space['image'].shape
-    num_actions = env.action_space
 
-    print(num_actions)
-    # (7, 7, 3)
+    # wrap our env with the NGU reward system
+    wrapped_env = NGU_env_wrapper(env)
 
-    # basic starting value
-    learning_rate = 0.001
-
-    # create DQN agent
-    my_dqn_agent = DQN(state_shape,num_actions, learning_rate)
+    # initialize the (multi-layered-perceptron) DQN agent, based on the wrapped env.
+    dqn_agent = DQN('MlpPolicy', wrapped_env,learning_rate=0.001,verbose=0)
 
 
 

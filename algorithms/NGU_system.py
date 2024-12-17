@@ -1,58 +1,101 @@
 """
 The NGU reward system.
 
-This could also be directly integrated into the DQN network, but we wanted to seperate the two as ideally, the NGU reward system can be 
-added as an extension to any given Algorithm.
+We will implement the NGU reward system by building a custom wrapper function for the Gymnasium environment. 
+A detailed explanation on these wrapper functions can be found here:
+https://gymnasium.farama.org/api/wrappers/
+
+
+In our wrapper function, we extend the normal environment reward with an instrinsic reward (and DoWhaM addition). 
+More specifically, we rewrite the step function which is normally given as: (taken from: https://gymnasium.farama.org/_modules/gymnasium/core/#Wrapper.step)
+
+    def step(
+        self, action: WrapperActType
+    ) -> tuple[WrapperObsType, SupportsFloat, bool, bool, dict[str, Any]]:
+        return self.env.step(action)
+
+Of which the arguments and returns are given as:
+
+        Args:
+            action (ActType): an action provided by the agent to update the environment state.
+
+        Returns:
+            observation (ObsType): An element of the environment's :attr:`observation_space` as the next observation due to the agent actions.
+                An example is a numpy array containing the positions and velocities of the pole in CartPole.
+            reward (SupportsFloat): The reward as a result of taking the action.
+            terminated (bool): Whether the agent reaches the terminal state (as defined under the MDP of the task)
+                which can be positive or negative. An example is reaching the goal state or moving into the lava from
+                the Sutton and Barto Gridworld. If true, the user needs to call :meth:`reset`.
+            truncated (bool): Whether the truncation condition outside the scope of the MDP is satisfied.
+                Typically, this is a timelimit, but could also be used to indicate an agent physically going out of bounds.
+                Can be used to end the episode prematurely before a terminal state is reached.
+                If true, the user needs to call :meth:`reset`.
+            info (dict): Contains auxiliary diagnostic information (helpful for debugging, learning, and logging).
+                This might, for instance, contain: metrics that describe the agent's performance state, variables that are
+                hidden from observations, or individual reward terms that are combined to produce the total reward.
+                In OpenAI Gym <v26, it contains "TimeLimit.truncated" to distinguish truncation and termination,
+                however this is deprecated in favour of returning terminated and truncated variables.
+            done (bool): (Deprecated) A boolean value for if the episode has ended, in which case further :meth:`step` calls will
+                return undefined results. This was removed in OpenAI Gym v26 in favor of terminated and truncated attributes.
+                A done signal may be emitted for different reasons: Maybe the task underlying the environment was solved successfully,
+                a certain timelimit was exceeded, or the physics simulation has entered an invalid state.
 """
 
+from typing import TYPE_CHECKING, Any, SupportsFloat
 
-class NGU:
-    """
-    NGU reward system to define the total reward that is then processed by a chosen algorithm for a certain state-action.
-    It combines the standard extrinsic reward from some environment with an intrinsic reward aimed at exploration. 
+import gymnasium as gym
+from gymnasium.core import WrapperActType, WrapperObsType, ObsType, ActType
 
-    In this case, it is further extended with the DoWhaM reward, which tunes the reward even more to favor actions that actually result in effective change (reaching a new state), 
-    not just change for the sake of it.
-    """
 
-    def __init__(self, beta_controller: float) -> None:
+class NGU_env_wrapper(gym.Wrapper):
+
+    def __init__(self, env: gym.Env[ObsType, ActType], beta:float =0.001):
         """
-        Initialize the NGU reward system.
-        Specify the value of the beta controller
-        TODO: this beta controller will later be modified by the Agent57 Meta controller(?) @Natalie
-
-        Keep track of a memory list for the states we have visited before, 
-        This will be needed for calculating the intrinsic reward and DoWhaM reward
+        initialize the wrapper.
+        
+        Use the super function to inherit the init method from the standard gym Wrapper.
+        Store "beta", our meta-controller
         """
-        self.beta_controller = beta_controller
+        super.__init__(env)
+        self.beta = beta
 
-        self.memory = []
-
-    def compute_total_reward(self,previous_state, state, action,  extrisic_reward: float) -> float:
+    def step(self, action: WrapperActType) -> tuple[WrapperObsType, SupportsFloat, bool, bool, dict[str, Any]]:
         """
-        Return the total reward for a certain state. It should get the state and extrinsic reward from the environment as arguments.
-        It also takes in the previous state, which will be used by DoWhaM to evaluate efficiency.
+        The updated step function. The framework is taken from the standard step function. 
 
-        Formula:
-        total_reward = extrinsic_reward + beta * intrinsic reward + DoWhaM reward
+        Arguments:
+        - the action taken
+
+        We then perform a step in the initialized environment with that action, and store the returns accordingly.
+        We preserve everything except for the reward, which we will process by performing our NGU addition.
+
+        """
+        next_state, extrinsic_reward, terminated, truncated, info = self.env.step(action)
+
+        # specify some intrinsic reward
+        intrinsic_reward = self._calc_intrinsic()
+        DoWhaM_reward = self._calc_DoWhaM()
+
+        total_reward = extrinsic_reward + self.beta * intrinsic_reward + DoWhaM_reward
+
+        return next_state, total_reward, terminated, truncated, info
+
+    def _calc_intrinsic(self) -> float:
+        """
+        TODO
+        Private method for calculating the intrinsic reward
         """
 
-        intrinsic_reward = self._intrinsic_reward(state)
-        DoWhaM_reward = self._DoWhaM_reward(state, previous_state)
+        return 0
+    
+    def _calc_DoWhaM(self) -> float:
+        """
+        TODO
+        Private method for calculating the DoWhaM additional reward.
+        """
 
-        return extrisic_reward + self.beta_controller * intrinsic_reward + DoWhaM_reward
+        return 0
 
-    def _intrinsic_reward(self, state) -> float:
-        """
-        Calcualate the intrinsic reward based on memory. 
-        """
-        pass
-
-    def _DoWhaM_reward(self, state, previous_state, action) -> float:
-        """
-        Calculate the DoWhaM reward (Don't Do What Does Not Matter)
-        Based on whether or not a state change occurs after some action.
-        """
     
 
-        pass
+    
