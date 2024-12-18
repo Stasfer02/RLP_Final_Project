@@ -7,7 +7,7 @@ https://gymnasium.farama.org/api/wrappers/
 
 
 In our wrapper function, we extend the normal environment reward with an instrinsic reward (and DoWhaM addition). 
-More specifically, we rewrite the step function which is normally given as: (taken from: https://gymnasium.farama.org/_modules/gymnasium/core/#Wrapper.step)
+Most importantly, we rewrite the step method which is normally given as: (taken from: https://gymnasium.farama.org/_modules/gymnasium/core/#Wrapper.step)
 
     def step(
         self, action: WrapperActType
@@ -15,10 +15,8 @@ More specifically, we rewrite the step function which is normally given as: (tak
         return self.env.step(action)
 
 Of which the arguments and returns are given as:
-
         Args:
             action (ActType): an action provided by the agent to update the environment state.
-
         Returns:
             observation (ObsType): An element of the environment's :attr:`observation_space` as the next observation due to the agent actions.
                 An example is a numpy array containing the positions and velocities of the pole in CartPole.
@@ -46,23 +44,33 @@ from scipy.spatial.distance import euclidean
 
 import gymnasium as gym
 import numpy as np
-from gymnasium.core import WrapperActType, WrapperObsType, ObsType, ActType
+from gymnasium.core import WrapperActType, WrapperObsType, ObsType, ActType, Any
 
 
 class NGU_env_wrapper(gym.Wrapper):
-
-    def __init__(self, env: gym.Env[ObsType, ActType], beta:float =0.001):
+    """
+    Wrapper class for a(ny) gymnasium environment to add the NGU reward system.
+    Initially built on the "Simple" and "dynamic-obstacles" environments.
+    """
+    def __init__(self, env: gym.Env[ObsType, ActType], beta:float =0.001, alpha:float= 0.1, eta:float = 40):
         """
         initialize the wrapper.
         
-        Use the super function to inherit the init method from the standard gym Wrapper.
-        Store "beta", our meta-controller
+        The arguments are:
+        env: The Gymnasium environment.
+        beta: the meta-controller to balance extrinsic and intrinsic rewards.
+        alpha: the scaling factor within the intrinsic reward.
+        eta: the decay rate for the DoWhaM reward.
         """
-        super.__init__(env)
+        super().__init__(env)
         self.beta = beta
 
-        self.intrinsic_agent = intrinsic_agent()
-        self.DoWhaM_agent = DoWhaM_agent()
+        # keep track of previous state for DoWhaM
+        self.previous_state = None
+
+        # initialize the additional reward agents with the hyperparameters.
+        self.intrinsic_agent = intrinsic_agent(alpha)
+        self.DoWhaM_agent = DoWhaM_agent(eta)
 
     def step(self, action: WrapperActType) -> tuple[WrapperObsType, SupportsFloat, bool, bool, dict[str, Any]]:
         """
@@ -76,38 +84,43 @@ class NGU_env_wrapper(gym.Wrapper):
 
         """
 
-        # the current state is the observation space
-        current_state = self.env.observation_space()
-
         # take a step in the environment adn store the returns
         next_state, extrinsic_reward, terminated, truncated, info = self.env.step(action)
 
-        # get the intrinsic reward
+        # get the intrinsic and DoWhaM rewards
         intrinsic_reward = self.intrinsic_agent.get_reward(next_state)
-
-        # get the DoWhaM reward
-        DoWhaM_reward = self.DoWhaM_agent.get_reward(current_state, next_state)
+        DoWhaM_reward = self.DoWhaM_agent.get_reward(self.previous_state, next_state)
 
         # calculate the total reward
         total_reward = extrinsic_reward + self.beta * intrinsic_reward + DoWhaM_reward
 
+        # set the previous state to this state for next step, needed for DoWham
+        self.previous_state = next_state
+
         return next_state, total_reward, terminated, truncated, info
-
     
-    def _calc_DoWhaM(self) -> float:
+    def reset(self, *, seed:int = None, options: dict[str, Any] = None) -> tuple[WrapperObsType, dict[str, Any]]:
         """
-        TODO
-        Private method for calculating the DoWhaM additional reward.
+        Inherited reset method. 
+        Forward the seeding/options to the env reset and return them after updating the previous state var.
         """
+        observation, info =  self.env.reset(seed, options)
 
-        return 0
+        # when resetting (= initializing) the env. Update the previous state for DoWhaM
+        self.previous_state = observation
+
+        return observation, info
+
 
 class intrinsic_agent:
     """
     agent for calculating the intrinsic reward
+
+    TODO:
+    Reset method?
     """
     
-    def __init__(self, alfa: float= 0.1):
+    def __init__(self, alpha: float):
         """
         initialize with the alfa (scaling factor for similarity) parameter.
 
@@ -115,6 +128,7 @@ class intrinsic_agent:
 
         TODO: Do we want to specify a certain length for this memory and consider the last x episodes?
         """
+        self.alpha = alpha
         self.episodic_memory: List[WrapperObsType] = []
 
     def get_reward(self, state: WrapperObsType) -> float:
@@ -127,37 +141,99 @@ class intrinsic_agent:
 
         # then we calculate it's similarity to the entire set of past states in memory
         total_similarity = 0
-        for prev_state in self.episodic_memory:
-            similarity = self._calc_Euclidean_distance(state, prev_state)
+        for memory_state in self.episodic_memory:
+            distance = self._calc_Euclidean_distance(state, memory_state)
+            similarity = np.exp(-self.alpha * distance)
             total_similarity += similarity
         
-        return 1 / np.sqrt(total_similarity + 1e-8) # adding a small value to the root to avoid dividing by 0.
+        return 1 / np.sqrt(total_similarity + 1e-16) # adding a small value to the root to avoid dividing by 0.
     
-    def _calc_Euclidean_distance(self, state: WrapperObsType, prev_state: WrapperObsType):
+    def _calc_Euclidean_distance(self, state: WrapperObsType, memory_state: WrapperObsType) -> float:
         """
         We evaluate similarity using the Euclidean distance function. 
-        While this is generally best for vector representations, we think it will suffice for this instance of image representation.
-        Mainly because the representations are not too complicated and similar states have very similar pixelated images.
+        While this is generally designed for vector representations, we think it will suffice for this instance of image representation.
+        Mainly because the representations are not too complicated and colors are stable, so similar states have very similar pixelated images.
 
         We use the ".flatten()" operator to transform our 3D representations of states (observation space) to a one-dimensional one.
         Now we can evaluate the euclidean distance.
         """
-        return euclidean(state.flatten(), prev_state.flatten())
+        return euclidean(state.flatten(), memory_state.flatten())
+
 
 class DoWhaM_agent:
     """
     DoWhaM additional reward.
+
+    TODO:
+    reset method?
     """
 
-    def __init__(self):
-        
-        pass
+    def __init__(self, eta:float):
+        """
+        eta is the decay rate parameter. From the paper, we took a base value of 40. We will later tune this. appendix A.3 in paper: https://arxiv.org/pdf/2105.09992
 
-    def get_reward(self, state: WrapperObsType, next_state: WrapperObsType):
+        We need to keep track of two dictionaries:
+        1. The amount of times an action has been taken
+        2. The amount of times an action has been "effective"
+        """
+        self.eta:float = eta
+
+        self.count_memory: dict = {}
+        self.effect_memory: dict = {}
+
+    def get_reward(self, state: WrapperObsType, action: WrapperActType, next_state: WrapperObsType) -> float:
         """
         TODO
         actual implementation
         """
+
+        # get the action count U^H
+        action_count = self._get_action_count(action)
+        action_effect = self._get_action_effect(action)
+
         if state == next_state:
-            return 1
-        return 0
+            # the state has not been changed, so reward is 0
+            return 0
+        else:
+            # effective state change occurred
+            self._put_action_effect(action)
+            
+            # calculate bonus score
+            B = ( self.eta ** (1 - (action_effect/action_count)) - 1) / (self.eta - 1)
+            # calculate total episodes
+            N = sum(self.count_memory.values())
+
+            return B / np.sqrt(N)
+
+    def _get_action_count(self, action: WrapperActType) -> int:
+        """
+        return and update/create the total count of the action. 
+        """
+        if action in self.count_memory:
+            # retrieve the count and increment it for this iteration.
+            self.count_memory[action] += 1
+            action_count = self.count_memory[action]
+        else:
+            # action is new, 
+            self.count_memory[action] = 1
+            action_count = 1
+
+        return action_count
+    
+    def _get_action_effect(self, action: WrapperActType) -> int:
+        """
+        return the effectiveness count of the action.
+        """
+        if action in self.effect_memory:
+            return self.effect_memory[action]
+        else:
+            return 0
+    
+    def _put_action_effect(self, action: WrapperActType) -> None:
+        """
+        Increase/create effectiveness score for the action.
+        """
+        if action in self.effect_memory:
+            self.effect_memory[action] += 1
+        else:
+            self.effect_memory[action] = 1
