@@ -104,7 +104,7 @@ class NGU_env_wrapper(gym.Wrapper):
         Inherited reset method. 
         Forward the seeding/options to the env reset and return them after updating the previous state var.
         """
-        observation, info =  self.env.reset(seed, options)
+        observation, info =  self.env.reset(seed=seed,options=options)
 
         # when resetting (= initializing) the env. Update the previous state for DoWhaM
         self.previous_state = observation
@@ -154,10 +154,22 @@ class intrinsic_agent:
         While this is generally designed for vector representations, we think it will suffice for this instance of image representation.
         Mainly because the representations are not too complicated and colors are stable, so similar states have very similar pixelated images.
 
-        We use the ".flatten()" operator to transform our 3D representations of states (observation space) to a one-dimensional one.
-        Now we can evaluate the euclidean distance.
         """
-        return euclidean(state.flatten(), memory_state.flatten())
+        return euclidean(self._flatten_state(state), self._flatten_state(memory_state))
+
+    def _flatten_state(self, state: WrapperObsType) -> List[int]:
+        """
+        TODO HOW?!
+        flatten the states so that they can be processed by the euclidean distance function
+        """
+        flattened_state = []
+        flattened_state.append(state['image'].flatten())    # the flattened image
+        flattened_state.append(state['direction'])
+        flattened_state.append(state['mission'])
+
+        print(flattened_state)
+        return np.concatenate(flattened_state)
+
 
 
 class DoWhaM_agent:
