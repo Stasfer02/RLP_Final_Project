@@ -44,6 +44,7 @@ from scipy.spatial.distance import euclidean
 
 import gymnasium as gym
 import numpy as np
+import tensorflow as tf
 from gymnasium.core import WrapperActType, WrapperObsType, ObsType, ActType, Any
 
 
@@ -117,26 +118,38 @@ class intrinsic_agent:
     agent for calculating the intrinsic reward
 
     TODO:
-    Now we need to replace this with the system from the paper, using an embedding network and k-nearest for the episodic memory.
+    Now we need to replace this with the system from the paper, using an embedding network for the episodic memory,
     And a random and prediction network for the life-long module.
     """
     
     def __init__(self, alpha: float, L: float):
         """
         initialize with the alfa (scaling factor for similarity) parameter.
-
-        Create the episodic memory dictionary in which we will store our past experiences.
+        L is the scaling factor for the life-long reward.
 
         TODO: Do we want to specify a certain length for this memory and consider the last x episodes?
         """
+
         self.alpha = alpha
         self.L = L
-        self.episodic_memory: List[WrapperObsType] = []
+
+        self.embedding_network = self._create_embedding_network()
+    
+    def _create_embedding_network(self, input_shape, output_shape):
+        """
+        We need to create a siamese embedding network, following the structure that can be found in
+        Appendix H.1 of the paper. 
+
+        TODO; implement
+        i think we need to connect the two subnetworks and then connect them afterwards somehow, 
+        but i'm not sure yet how to do this. Have to research the Keras tools some more.
+        """
+        pass
 
     def get_reward(self, state: WrapperObsType) -> float:
         """
         calculate the intrinsic reward for some action.
-        The episodic reward is scaled based on the life-long reward. as read in chapter 2 of the fundamental paper.
+        The episodic reward is scaled based on the life-long reward. as read in chapter 2 of the paper.
         """
 
         intrinsic_reward = self._episodic_reward * np.min( [np.max( [self._life_long_reward, 1] ), self.L] )
@@ -145,7 +158,9 @@ class intrinsic_agent:
     def _episodic_reward(self):
         """
         calculate the episodic reward using the embedding network and k-nearest neighbours.
+
         TODO: implement
+        Here we need to map to our embedding network which still needs to be created.
         """
 
         reward = None
@@ -154,7 +169,8 @@ class intrinsic_agent:
     def _life_long_reward(self):
         """
         calculate the life-long (life = one episode) reward. 
-        
+
+        TODO: implement
         """
         reward = None
         return reward
