@@ -52,7 +52,7 @@ class NGU_env_wrapper(gym.Wrapper):
     Wrapper class for a(ny) gymnasium environment to add the NGU reward system.
     Initially built on the "Simple" and "dynamic-obstacles" environments.
     """
-    def __init__(self, env: gym.Env[ObsType, ActType], beta:float =0.001, alpha:float= 0.1, eta:float = 40):
+    def __init__(self, env: gym.Env[ObsType, ActType], beta:float =0.001, alpha:float= 0.1, eta:float = 40, L:float = 5.0):
         """
         initialize the wrapper.
         
@@ -61,6 +61,7 @@ class NGU_env_wrapper(gym.Wrapper):
         beta: the meta-controller to balance extrinsic and intrinsic rewards.
         alpha: the scaling factor within the intrinsic reward.
         eta: the decay rate for the DoWhaM reward.
+        L: reward scaling factor: for scaling the life-long novelty reward and the episodic reward. standard value = 5 (as mentioned in the paper)
         """
         super().__init__(env)
         self.beta = beta
@@ -69,7 +70,7 @@ class NGU_env_wrapper(gym.Wrapper):
         self.previous_state = None
 
         # initialize the additional reward agents with the hyperparameters.
-        self.intrinsic_agent = intrinsic_agent(alpha)
+        self.intrinsic_agent = intrinsic_agent(alpha, L)
         self.DoWhaM_agent = DoWhaM_agent(eta)
 
     def step(self, action: WrapperActType) -> tuple[WrapperObsType, SupportsFloat, bool, bool, dict[str, Any]]:
@@ -81,7 +82,6 @@ class NGU_env_wrapper(gym.Wrapper):
 
         We store the current state and then perform a step in the initialized environment with that action, and store the returns accordingly.
         We preserve everything except for the reward, which we will process by performing our NGU addition.
-
         """
 
         # take a step in the environment adn store the returns
@@ -117,10 +117,11 @@ class intrinsic_agent:
     agent for calculating the intrinsic reward
 
     TODO:
-    Reset method?
+    Now we need to replace this with the system from the paper, using an embedding network and k-nearest for the episodic memory.
+    And a random and prediction network for the life-long module.
     """
     
-    def __init__(self, alpha: float):
+    def __init__(self, alpha: float, L: float):
         """
         initialize with the alfa (scaling factor for similarity) parameter.
 
@@ -129,47 +130,34 @@ class intrinsic_agent:
         TODO: Do we want to specify a certain length for this memory and consider the last x episodes?
         """
         self.alpha = alpha
+        self.L = L
         self.episodic_memory: List[WrapperObsType] = []
 
     def get_reward(self, state: WrapperObsType) -> float:
         """
         calculate the intrinsic reward for some action.
+        The episodic reward is scaled based on the life-long reward. as read in chapter 2 of the fundamental paper.
         """
 
-        # first we append the current state to the episodic memory
-        self.episodic_memory.append(state)
-
-        # then we calculate it's similarity to the entire set of past states in memory
-        total_similarity = 0
-        for memory_state in self.episodic_memory:
-            distance = self._calc_Euclidean_distance(state, memory_state)
-            similarity = np.exp(-self.alpha * distance)
-            total_similarity += similarity
-        
-        return 1 / np.sqrt(total_similarity + 1e-16) # adding a small value to the root to avoid dividing by 0.
+        intrinsic_reward = self._episodic_reward * np.min( [np.max( [self._life_long_reward, 1] ), self.L] )
+        return intrinsic_reward
     
-    def _calc_Euclidean_distance(self, state: WrapperObsType, memory_state: WrapperObsType) -> float:
+    def _episodic_reward(self):
         """
-        We evaluate similarity using the Euclidean distance function. 
-        While this is generally designed for vector representations, we think it will suffice for this instance of image representation.
-        Mainly because the representations are not too complicated and colors are stable, so similar states have very similar pixelated images.
-
+        calculate the episodic reward using the embedding network and k-nearest neighbours.
+        TODO: implement
         """
-        return euclidean(self._flatten_state(state), self._flatten_state(memory_state))
 
-    def _flatten_state(self, state: WrapperObsType) -> List[int]:
+        reward = None
+        return reward
+
+    def _life_long_reward(self):
         """
-        TODO HOW?!
-        flatten the states so that they can be processed by the euclidean distance function
+        calculate the life-long (life = one episode) reward. 
+        
         """
-        flattened_state = []
-        flattened_state.append(state['image'].flatten())    # the flattened image
-        flattened_state.append(state['direction'])
-        flattened_state.append(state['mission'])
-
-        print(flattened_state)
-        return np.concatenate(flattened_state)
-
+        reward = None
+        return reward
 
 
 class DoWhaM_agent:
@@ -195,15 +183,14 @@ class DoWhaM_agent:
 
     def get_reward(self, state: WrapperObsType, action: WrapperActType, next_state: WrapperObsType) -> float:
         """
-        TODO
-        actual implementation
+        getting the DoWhaM reward.
         """
 
         # get the action count U^H
         action_count = self._get_action_count(action)
         action_effect = self._get_action_effect(action)
 
-        if state == next_state:
+        if np.array_equal(state, next_state):
             # the state has not been changed, so reward is 0
             return 0
         else:
