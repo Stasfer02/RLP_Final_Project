@@ -44,7 +44,10 @@ from scipy.spatial.distance import euclidean
 
 import gymnasium as gym
 import numpy as np
+
 import tensorflow as tf
+from keras import models
+
 from gymnasium.core import WrapperActType, WrapperObsType, ObsType, ActType, Any
 
 
@@ -71,7 +74,8 @@ class NGU_env_wrapper(gym.Wrapper):
         self.previous_state = None
 
         # initialize the additional reward agents with the hyperparameters.
-        self.intrinsic_agent = intrinsic_agent(alpha, L)
+        # to the intrinsic agent, we pass alpha, L and the observation- and action spaces.
+        self.intrinsic_agent = intrinsic_agent(alpha, L, env.observation_space, env.action_space)
         self.DoWhaM_agent = DoWhaM_agent(eta)
 
     def step(self, action: WrapperActType) -> tuple[WrapperObsType, SupportsFloat, bool, bool, dict[str, Any]]:
@@ -122,7 +126,7 @@ class intrinsic_agent:
     And a random and prediction network for the life-long module.
     """
     
-    def __init__(self, alpha: float, L: float):
+    def __init__(self, alpha: float, L: float, input_shape, output_shape):
         """
         initialize with the alfa (scaling factor for similarity) parameter.
         L is the scaling factor for the life-long reward.
@@ -133,18 +137,52 @@ class intrinsic_agent:
         self.alpha = alpha
         self.L = L
 
-        self.embedding_network = self._create_embedding_network()
+        # creating the embedding network
+        self.embedding_network = self._create_embedding_network(input_shape, output_shape)
     
     def _create_embedding_network(self, input_shape, output_shape):
         """
         We need to create a siamese embedding network, following the structure that can be found in
         Appendix H.1 of the paper. 
 
-        TODO; implement
-        i think we need to connect the two subnetworks and then connect them afterwards somehow, 
-        but i'm not sure yet how to do this. Have to research the Keras tools some more.
+        TODO; TESTING
         """
-        pass
+        
+        def create_partial_network(input_shape):
+            # create part of the siamese network (twice)
+            inputs = models.Input(shape= input_shape)
+            x = models.layers.Conv2D(32, kernel_size= 8, strides= 4, activation='relu')(inputs)
+            x = models.layers.Conv2D(64, kernel_size= 4, strides= 2, activation='relu')(x)
+            x = models.layers.Conv2D(64, kernel_size= 3, strides= 1, activation='relu')(x)
+
+            # now flatten the 3D vector into 1D for the fully connected layer
+            x = models.layers.Flatten()(x)
+            x = models.layers.Dense(32, activation='relu')(x)
+
+            # return the entire model
+            return models.Model(inputs, x)
+
+        # the input for the siamese components are 2 similar inputs for t and t +1
+        input_A = models.Input(input_shape)
+        input_B = models.Input(input_shape)
+
+        # create the siamese networks
+        siamese_A = create_partial_network(input_shape)         # for state at timestep t
+        siamese_B = create_partial_network(input_shape)         # for state at timestep t+1
+
+        # process the inputs through both siamese components
+        processed_A = siamese_A(input_A)
+        processed_B = siamese_B(input_B)
+
+        # merge them
+        merged_model = models.layers.Concatenate()([processed_A, processed_B])
+    
+        # finish with fully connected layers (last layer has the dimensions of the output, this is different for the paper as the environment is different.)
+        x = models.layers.Dense(128, activation='relu')(merged_model)
+        x = models.layers.Dense(output_shape, activation='softmax')(x)
+
+        # return the entire model
+        return models.Model(inputs=[input_A, input_B], outputs= x)
 
     def get_reward(self, state: WrapperObsType) -> float:
         """
