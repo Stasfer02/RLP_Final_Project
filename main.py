@@ -47,7 +47,7 @@ def main():
     )
 
     # let the DQN agent learn on the wrapped env, but use the custom callback (non-wrapped env) for evaluation
-    dqn_agent.learn(10000, callback= eval_callback)
+    #dqn_agent.learn(10000, callback= eval_callback)
 
 
 

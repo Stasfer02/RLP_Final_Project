@@ -40,13 +40,12 @@ Of which the arguments and returns are given as:
 """
 
 from typing import TYPE_CHECKING, Any, SupportsFloat, List
-from scipy.spatial.distance import euclidean
-
+from sklearn.neighbors import NearestNeighbors
 import gymnasium as gym
 import numpy as np
 
 import tensorflow as tf
-from keras import models
+from keras import models, layers
 
 from gymnasium.core import WrapperActType, WrapperObsType, ObsType, ActType, Any
 
@@ -56,7 +55,7 @@ class NGU_env_wrapper(gym.Wrapper):
     Wrapper class for a(ny) gymnasium environment to add the NGU reward system.
     Initially built on the "Simple" and "dynamic-obstacles" environments.
     """
-    def __init__(self, env: gym.Env[ObsType, ActType], beta:float =0.001, alpha:float= 0.1, eta:float = 40, L:float = 5.0):
+    def __init__(self, env: gym.Env[ObsType, ActType], beta:float =0.001, alpha:float= 0.1, eta:float = 40, L:float = 5.0, k:int = 10):
         """
         initialize the wrapper.
         
@@ -66,6 +65,7 @@ class NGU_env_wrapper(gym.Wrapper):
         alpha: the scaling factor within the intrinsic reward.
         eta: the decay rate for the DoWhaM reward.
         L: reward scaling factor: for scaling the life-long novelty reward and the episodic reward. standard value = 5 (as mentioned in the paper)
+        k: amount of k-nearest neighbours for the embedding network.
         """
         super().__init__(env)
         self.beta = beta
@@ -75,7 +75,7 @@ class NGU_env_wrapper(gym.Wrapper):
 
         # initialize the additional reward agents with the hyperparameters.
         # to the intrinsic agent, we pass alpha, L and the observation- and action spaces.
-        self.intrinsic_agent = intrinsic_agent(alpha, L, env.observation_space, env.action_space)
+        self.intrinsic_agent = intrinsic_agent(alpha, L, k, env.observation_space, env.action_space)
         self.DoWhaM_agent = DoWhaM_agent(eta)
 
     def step(self, action: WrapperActType) -> tuple[WrapperObsType, SupportsFloat, bool, bool, dict[str, Any]]:
@@ -93,7 +93,7 @@ class NGU_env_wrapper(gym.Wrapper):
         next_state, extrinsic_reward, terminated, truncated, info = self.env.step(action)
 
         # get the intrinsic and DoWhaM rewards
-        intrinsic_reward = self.intrinsic_agent.get_reward(next_state)
+        intrinsic_reward = self.intrinsic_agent.get_reward(self.previous_state, next_state)
         DoWhaM_reward = self.DoWhaM_agent.get_reward(self.previous_state, next_state)
 
         # calculate the total reward
@@ -122,24 +122,41 @@ class intrinsic_agent:
     agent for calculating the intrinsic reward
 
     TODO:
-    Now we need to replace this with the system from the paper, using an embedding network for the episodic memory,
-    And a random and prediction network for the life-long module.
+    - We need to preprocess the observation to a format that can be handled by the embedding network. The format also needs to be specified and forwarded on creation of the embedding network.
+    - implement the life-long module
     """
     
-    def __init__(self, alpha: float, L: float, input_shape, output_shape):
+    def __init__(self, alpha: float, L: float, k: int, obs_space, action_space):
         """
         initialize with the alfa (scaling factor for similarity) parameter.
         L is the scaling factor for the life-long reward.
+        k is the amount of nearest neighbours
 
-        TODO: Do we want to specify a certain length for this memory and consider the last x episodes?
+        TODO: 
+        Do we want to specify a certain length for this memory and consider the last x episodes?
         """
 
         self.alpha = alpha
         self.L = L
+        self.k = k
 
-        # creating the embedding network
-        self.embedding_network = self._create_embedding_network(input_shape, output_shape)
+        # TODO what will the input- and output shape be based on the obs_space? we later need to preprocess these
+        input_shape = None 
+        output_shape = None
+
+        # create the embedding network
+        self.embedding_network = self._create_embedding_network(input_shape, action_space)
+
+        # k-nearest neighbours memory storage
+        self.KNN = NearestNeighbors(n_neighbors= self.k, algorithm= 'auto')
+        self.KNN_memory = []
     
+    def _preproc_obs(self, obs_space):
+        """
+        Preprocess the observation, which is now ('direction', 'image', 'mission') to something that can be embedded. 
+        """
+        pass
+
     def _create_embedding_network(self, input_shape, output_shape):
         """
         We need to create a siamese embedding network, following the structure that can be found in
@@ -150,21 +167,21 @@ class intrinsic_agent:
         
         def create_partial_network(input_shape):
             # create part of the siamese network (twice)
-            inputs = models.Input(shape= input_shape)
-            x = models.layers.Conv2D(32, kernel_size= 8, strides= 4, activation='relu')(inputs)
-            x = models.layers.Conv2D(64, kernel_size= 4, strides= 2, activation='relu')(x)
-            x = models.layers.Conv2D(64, kernel_size= 3, strides= 1, activation='relu')(x)
+            inputs = layers.Input(shape= input_shape)
+            x = layers.Conv2D(32, kernel_size= 8, strides= 4, activation='relu')(inputs)
+            x = layers.Conv2D(64, kernel_size= 4, strides= 2, activation='relu')(x)
+            x = layers.Conv2D(64, kernel_size= 3, strides= 1, activation='relu')(x)
 
             # now flatten the 3D vector into 1D for the fully connected layer
-            x = models.layers.Flatten()(x)
-            x = models.layers.Dense(32, activation='relu')(x)
+            x = layers.Flatten()(x)
+            x = layers.Dense(32, activation='relu')(x)
 
             # return the entire model
             return models.Model(inputs, x)
 
         # the input for the siamese components are 2 similar inputs for t and t +1
-        input_A = models.Input(input_shape)
-        input_B = models.Input(input_shape)
+        input_A = layers.Input(input_shape)
+        input_B = layers.Input(input_shape)
 
         # create the siamese networks
         siamese_A = create_partial_network(input_shape)         # for state at timestep t
@@ -175,34 +192,46 @@ class intrinsic_agent:
         processed_B = siamese_B(input_B)
 
         # merge them
-        merged_model = models.layers.Concatenate()([processed_A, processed_B])
+        merged_model = layers.Concatenate()([processed_A, processed_B])
     
         # finish with fully connected layers (last layer has the dimensions of the output, this is different for the paper as the environment is different.)
-        x = models.layers.Dense(128, activation='relu')(merged_model)
-        x = models.layers.Dense(output_shape, activation='softmax')(x)
+        x = layers.Dense(128, activation='relu')(merged_model)
+        x = layers.Dense(output_shape, activation='softmax')(x)
 
         # return the entire model
         return models.Model(inputs=[input_A, input_B], outputs= x)
 
-    def get_reward(self, state: WrapperObsType) -> float:
+    def get_reward(self, previous_state: WrapperObsType, state: WrapperObsType) -> float:
         """
         calculate the intrinsic reward for some action.
         The episodic reward is scaled based on the life-long reward. as read in chapter 2 of the paper.
         """
 
-        intrinsic_reward = self._episodic_reward * np.min( [np.max( [self._life_long_reward, 1] ), self.L] )
+        processed_state = self._preproc_obs(state)
+        processed_prev_state = self._preproc_obs(previous_state)
+        intrinsic_reward = self._episodic_reward(processed_prev_state, processed_state) * np.min( [np.max( [self._life_long_reward, 1] ), self.L] )
+
         return intrinsic_reward
     
-    def _episodic_reward(self):
+    def _episodic_reward(self, last_state, state):
         """
         calculate the episodic reward using the embedding network and k-nearest neighbours.
 
         TODO: implement
-        Here we need to map to our embedding network which still needs to be created.
+        Here we need to map to our embedding network.
+        Then with K-Nearest Neighbours we find the reward.
         """
+        embedded = self.embedding_network.predict(last_state, state)
 
-        reward = None
+        self.KNN_memory.append(embedded)
+        self.KNN.fit(self.KNN_memory)
+
+        distances, _ = self.KNN.kneighbors([embedded])
+
+        # reward is the inv of the mean distances (?) check paper. avoiding division by 0 by adding small term.
+        reward = 1 / ((np.mean(distances)) + 1e-8) 
         return reward
+
 
     def _life_long_reward(self):
         """
