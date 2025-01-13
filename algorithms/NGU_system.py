@@ -246,7 +246,7 @@ class intrinsic_agent:
         Then with K-Nearest Neighbours we find the reward.
         """
 
-        last_state = np.expand_dims(last_state, axis=0)     # needed to expand dimension by extra batch dim, maybe this can be the direction vector?
+        last_state = np.expand_dims(last_state, axis=0)     # needed to expand dimension by extra batch dim to match network, maybe this can be the direction vector?
         state = np.expand_dims(state, axis=0)
 
         embedded = self.embedding_network.predict([last_state, state])
@@ -307,8 +307,7 @@ class DoWhaM_agent:
         action_count = self._get_action_count(action)
         action_effect = self._get_action_effect(action)
 
-        logging.debug(f"DOWHAM: state: {state}")
-        if state == next_state:
+        if state['direction'] == next_state['direction'] and np.array_equal(state['image'], next_state['image']):
             # the state has not been changed, so reward is 0
             return 0
         else:

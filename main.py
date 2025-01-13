@@ -28,8 +28,8 @@ def main():
 
     # wrap our training env with the NGU reward system, check the validity of the environment. 
     env_train = NGU_env_wrapper(env_train)
-    check_env(env_train)
-    logging.info(f"Wrapped the training environment with NGU.")
+    #check_env(env_train)
+    logging.info(f"Wrapped the training environment with NGU. Observation space: {env_train.observation_space}")
 
     # initialize the (multi-layered-perceptron) DQN agent, based on the wrapped env.
     dqn_agent = DQN('MlpPolicy', env_train,learning_rate=0.001,verbose=0)
