@@ -18,7 +18,7 @@ from algorithms.NGU_system import NGU_env_wrapper
 from gymnasium.utils.env_checker import check_env
 
 def main():
-    logging.basicConfig(level=logging.INFO, format='%(message)s')
+    logging.basicConfig(level=logging.DEBUG, format='%(message)s')
 
     # initialize instance of the environment for training and evaluation
     logging.info("Creating the environments ...")

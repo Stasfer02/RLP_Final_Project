@@ -43,6 +43,7 @@ from typing import TYPE_CHECKING, Any, SupportsFloat, List
 from sklearn.neighbors import NearestNeighbors
 import gymnasium as gym
 import numpy as np
+import logging
 
 import tensorflow as tf
 from keras import models, layers
@@ -94,7 +95,7 @@ class NGU_env_wrapper(gym.Wrapper):
 
         # get the intrinsic and DoWhaM rewards
         intrinsic_reward = self.intrinsic_agent.get_reward(self.previous_state, next_state)
-        DoWhaM_reward = self.DoWhaM_agent.get_reward(self.previous_state, next_state)
+        DoWhaM_reward = self.DoWhaM_agent.get_reward(self.previous_state, action, next_state)
 
         # calculate the total reward
         total_reward = extrinsic_reward + self.beta * intrinsic_reward + DoWhaM_reward
@@ -132,8 +133,8 @@ class intrinsic_agent:
         L is the scaling factor for the life-long reward.
         k is the amount of nearest neighbours
 
-        TODO: 
-        Do we want to specify a certain length for this memory and consider the last x episodes?
+        TODO:
+        input/output shapes for the embedding network? how to implement.
         """
 
         self.alpha = alpha
@@ -141,21 +142,35 @@ class intrinsic_agent:
         self.k = k
 
         # TODO what will the input- and output shape be based on the obs_space? we later need to preprocess these
-        input_shape = None 
-        output_shape = None
+        input_shape = (7,7,3)
 
         # create the embedding network
-        self.embedding_network = self._create_embedding_network(input_shape, action_space)
+        self.embedding_network = self._create_embedding_network(input_shape, action_space.n)
 
         # k-nearest neighbours memory storage
         self.KNN = NearestNeighbors(n_neighbors= self.k, algorithm= 'auto')
-        self.KNN_memory = []
+        self.KNN_memory = np.empty(action_space.n,dtype=float)
     
     def _preproc_obs(self, obs_space):
         """
         Preprocess the observation, which is now ('direction', 'image', 'mission') to something that can be embedded. 
+        TODO: how to include the direction vector. now we only take the image.
         """
-        pass
+
+        # ??? use one-hot encoder to expand the direction variable. now it is not just a single value (like: 1) but [0, 1, 0, 0]
+        direction = obs_space['direction']
+        onehot_encoded_dir = np.eye(4)[direction]
+
+        img = obs_space['image']
+        normalized_img = img / 255    # make sure values are between 0 and 1
+
+        # TODO how should we add the direction?
+        #processed_obs = np.concatenate([onehot_encoded_dir, normalized_img])
+        #logging.debug(f"INTRINSIC AGENT: Processed observation {processed_obs}")
+
+        # temporary sol: just the image
+        processed_obs = normalized_img
+        return processed_obs
 
     def _create_embedding_network(self, input_shape, output_shape):
         """
@@ -164,18 +179,27 @@ class intrinsic_agent:
 
         TODO; TESTING
         """
-        
+        logging.debug("INTRINSIC AGENT: Creating the embedding network...")
+
         def create_partial_network(input_shape):
             # create part of the siamese network (twice)
+            # kernel and stride values are fit to our env with a much lower-dimensional input space (compared to the env in the paper)
             inputs = layers.Input(shape= input_shape)
-            x = layers.Conv2D(32, kernel_size= 8, strides= 4, activation='relu')(inputs)
-            x = layers.Conv2D(64, kernel_size= 4, strides= 2, activation='relu')(x)
-            x = layers.Conv2D(64, kernel_size= 3, strides= 1, activation='relu')(x)
+            logging.debug(f"{inputs.shape} input dimensions")
+
+            x = layers.Conv2D(32, kernel_size= 3, strides= 2, activation='relu',padding='same')(inputs)
+            logging.debug(f"{x.shape} dimensions after first Conv layer")
+
+            x = layers.Conv2D(64, kernel_size= 2, strides= 1, activation='relu')(x)
+            logging.debug(f"{x.shape} dimensions after second Conv layer")
+
+            x = layers.Conv2D(64, kernel_size= 2, strides= 1, activation='relu')(x)
+            logging.debug(f"{x.shape} dimensions after third Conv layer")
 
             # now flatten the 3D vector into 1D for the fully connected layer
             x = layers.Flatten()(x)
             x = layers.Dense(32, activation='relu')(x)
-
+            logging.debug(f"{x.shape} final dimensions after connecting siamese networks through the flattened, dense layer")
             # return the entire model
             return models.Model(inputs, x)
 
@@ -193,11 +217,11 @@ class intrinsic_agent:
 
         # merge them
         merged_model = layers.Concatenate()([processed_A, processed_B])
-    
+
         # finish with fully connected layers (last layer has the dimensions of the output, this is different for the paper as the environment is different.)
         x = layers.Dense(128, activation='relu')(merged_model)
         x = layers.Dense(output_shape, activation='softmax')(x)
-
+        logging.debug(f"{x.shape} Dimensions after connecting siamese networks")
         # return the entire model
         return models.Model(inputs=[input_A, input_B], outputs= x)
 
@@ -209,7 +233,7 @@ class intrinsic_agent:
 
         processed_state = self._preproc_obs(state)
         processed_prev_state = self._preproc_obs(previous_state)
-        intrinsic_reward = self._episodic_reward(processed_prev_state, processed_state) * np.min( [np.max( [self._life_long_reward, 1] ), self.L] )
+        intrinsic_reward = self._episodic_reward(processed_prev_state, processed_state) * np.min( [np.max( [self._life_long_reward(), 1] ), self.L] )
 
         return intrinsic_reward
     
@@ -221,12 +245,22 @@ class intrinsic_agent:
         Here we need to map to our embedding network.
         Then with K-Nearest Neighbours we find the reward.
         """
-        embedded = self.embedding_network.predict(last_state, state)
 
-        self.KNN_memory.append(embedded)
+        last_state = np.expand_dims(last_state, axis=0)     # needed to expand dimension by extra batch dim, maybe this can be the direction vector?
+        state = np.expand_dims(state, axis=0)
+
+        embedded = self.embedding_network.predict([last_state, state])
+        logging.debug(f"INTRINSIC: embedded: {embedded}, with shape: {embedded.shape}")
+
+        self.KNN_memory = np.vstack([self.KNN_memory, embedded])
+        logging.debug(f"INTRINSIC: KNN memory: {self.KNN_memory}\n")
         self.KNN.fit(self.KNN_memory)
 
-        distances, _ = self.KNN.kneighbors([embedded])
+        if len(self.KNN_memory) < self.k:
+            # not enough neighbors, reward = 0
+            return 0
+        
+        distances, _ = self.KNN.kneighbors(embedded)
 
         # reward is the inv of the mean distances (?) check paper. avoiding division by 0 by adding small term.
         reward = 1 / ((np.mean(distances)) + 1e-8) 
@@ -239,7 +273,7 @@ class intrinsic_agent:
 
         TODO: implement
         """
-        reward = None
+        reward = 0
         return reward
 
 
@@ -273,7 +307,8 @@ class DoWhaM_agent:
         action_count = self._get_action_count(action)
         action_effect = self._get_action_effect(action)
 
-        if np.array_equal(state, next_state):
+        logging.debug(f"DOWHAM: state: {state}")
+        if state == next_state:
             # the state has not been changed, so reward is 0
             return 0
         else:
