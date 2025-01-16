@@ -46,6 +46,8 @@ import numpy as np
 import logging
 
 import tensorflow as tf
+tf.random.set_seed(1234)
+
 from keras import models, layers
 
 from gymnasium.core import WrapperActType, WrapperObsType, ObsType, ActType, Any
@@ -56,14 +58,13 @@ class NGU_env_wrapper(gym.Wrapper):
     Wrapper class for a(ny) gymnasium environment to add the NGU reward system.
     Initially built on the "Simple" and "dynamic-obstacles" environments.
     """
-    def __init__(self, env: gym.Env[ObsType, ActType], beta:float =0.001, alpha:float= 0.1, eta:float = 40, L:float = 5.0, k:int = 10):
+    def __init__(self, env: gym.Env[ObsType, ActType], beta:float =0.001, eta:float = 40, L:float = 5.0, k:int = 10):
         """
         initialize the wrapper.
         
         The arguments are:
         env: The Gymnasium environment.
         beta: the meta-controller to balance extrinsic and intrinsic rewards.
-        alpha: the scaling factor within the intrinsic reward.
         eta: the decay rate for the DoWhaM reward.
         L: reward scaling factor: for scaling the life-long novelty reward and the episodic reward. standard value = 5 (as mentioned in the paper)
         k: amount of k-nearest neighbours for the embedding network.
@@ -76,7 +77,7 @@ class NGU_env_wrapper(gym.Wrapper):
 
         # initialize the additional reward agents with the hyperparameters.
         # to the intrinsic agent, we pass alpha, L and the observation- and action spaces.
-        self.intrinsic_agent = intrinsic_agent(alpha, L, k, env.observation_space, env.action_space)
+        self.intrinsic_agent = intrinsic_agent(L, k, env.observation_space, env.action_space)
         self.DoWhaM_agent = DoWhaM_agent(eta)
 
     def step(self, action: WrapperActType) -> tuple[WrapperObsType, SupportsFloat, bool, bool, dict[str, Any]]:
@@ -127,7 +128,7 @@ class intrinsic_agent:
     - implement the life-long module
     """
     
-    def __init__(self, alpha: float, L: float, k: int, obs_space, action_space):
+    def __init__(self, L: float, k: int, obs_space, action_space):
         """
         initialize with the alfa (scaling factor for similarity) parameter.
         L is the scaling factor for the life-long reward.
@@ -136,70 +137,45 @@ class intrinsic_agent:
         TODO:
         input/output shapes for the embedding network? how to implement.
         """
-
-        self.alpha = alpha
         self.L = L
         self.k = k
 
         # TODO what will the input- and output shape be based on the obs_space? we later need to preprocess these
         input_shape = (7,7,3)
 
-        # create the embedding network
+        # life-long module, random and predictor networks
+        self.LL_random_network = self._create_LL_network(input_shape, 64)
+        self.LL_predictor_network = self._create_LL_network(input_shape, 64)
+
+        # episodic module, embedding network
         self.embedding_network = self._create_embedding_network(input_shape, action_space.n)
 
-        # k-nearest neighbours memory storage
+        # episodic module, k-nearest neighbors memory storage
         self.KNN = NearestNeighbors(n_neighbors= self.k, algorithm= 'auto')
         self.KNN_memory = np.empty(action_space.n,dtype=float)
-    
-    def _preproc_obs(self, obs_space):
-        """
-        Preprocess the observation, which is now ('direction', 'image', 'mission') to something that can be embedded. 
-        TODO: how to include the direction vector. now we only take the image.
-        """
-
-        # ??? use one-hot encoder to expand the direction variable. now it is not just a single value (like: 1) but [0, 1, 0, 0]
-        direction = obs_space['direction']
-        onehot_encoded_dir = np.eye(4)[direction]
-
-        img = obs_space['image']
-        normalized_img = img / 255    # make sure values are between 0 and 1
-
-        # TODO how should we add the direction?
-        #processed_obs = np.concatenate([onehot_encoded_dir, normalized_img])
-        #logging.debug(f"INTRINSIC AGENT: Processed observation {processed_obs}")
-
-        # temporary sol: just the image
-        processed_obs = normalized_img
-        return processed_obs
 
     def _create_embedding_network(self, input_shape, output_shape):
         """
         We need to create a siamese embedding network, following the structure that can be found in
         Appendix H.1 of the paper. 
-
-        TODO; TESTING
+        However, because the observation space of our environment is much smaller, we needed to decrease kernel & stride sizes
         """
-        logging.debug("INTRINSIC AGENT: Creating the embedding network...")
+        logging.info("Creating the embedding network...")
 
         def create_partial_network(input_shape):
             # create part of the siamese network (twice)
-            # kernel and stride values are fit to our env with a much lower-dimensional input space (compared to the env in the paper)
+            
             inputs = layers.Input(shape= input_shape)
-            logging.debug(f"{inputs.shape} input dimensions")
+            logging.debug(f"{inputs.shape} siamese network: input dimensions")
 
             x = layers.Conv2D(32, kernel_size= 3, strides= 2, activation='relu',padding='same')(inputs)
-            logging.debug(f"{x.shape} dimensions after first Conv layer")
-
             x = layers.Conv2D(64, kernel_size= 2, strides= 1, activation='relu')(x)
-            logging.debug(f"{x.shape} dimensions after second Conv layer")
-
             x = layers.Conv2D(64, kernel_size= 2, strides= 1, activation='relu')(x)
-            logging.debug(f"{x.shape} dimensions after third Conv layer")
 
             # now flatten the 3D vector into 1D for the fully connected layer
             x = layers.Flatten()(x)
             x = layers.Dense(32, activation='relu')(x)
-            logging.debug(f"{x.shape} final dimensions after connecting siamese networks through the flattened, dense layer")
+            logging.debug(f"{x.shape} siamese network: final dimensions after connecting siamese networks through the flattened, dense layer")
             # return the entire model
             return models.Model(inputs, x)
 
@@ -221,9 +197,31 @@ class intrinsic_agent:
         # finish with fully connected layers (last layer has the dimensions of the output, this is different for the paper as the environment is different.)
         x = layers.Dense(128, activation='relu')(merged_model)
         x = layers.Dense(output_shape, activation='softmax')(x)
-        logging.debug(f"{x.shape} Dimensions after connecting siamese networks")
+        logging.debug(f"{x.shape} embedding network: Dimensions after connecting siamese networks")
+
         # return the entire model
         return models.Model(inputs=[input_A, input_B], outputs= x)
+
+    def _create_LL_network(self, input_shape, output_shape):
+        """
+        creating the random and predictor networks for the Life-Long module. More info in the life-long-reward method.
+        The design is based on the one in the paper. It is (obviously) identical for the random and predictor network.
+        
+        The only change we made was in the kernel and stride sizes, as our observation space differs from that in the paper, so we needed to decrease those.
+        """
+        logging.info("Creating the Life-Long random network...")
+
+        input = layers.Input(shape=input_shape)
+        x = layers.Conv2D(32, kernel_size= 3, strides= 2, activation='linear')(input)
+        x = layers.Conv2D(64, kernel_size= 2, strides= 1, activation='relu')(x)
+        x = layers.Conv2D(64, kernel_size= 2, strides= 1, activation='relu')(x)
+        x = layers.Flatten()(x)
+        x = layers.Dense(128, activation='relu')(x)
+
+        # output layer
+        x = layers.Dense(output_shape, activation='linear')(x)
+
+        return models.Model(inputs=input, outputs= x)
 
     def get_reward(self, previous_state: WrapperObsType, state: WrapperObsType) -> float:
         """
@@ -233,7 +231,7 @@ class intrinsic_agent:
 
         processed_state = self._preproc_obs(state)
         processed_prev_state = self._preproc_obs(previous_state)
-        intrinsic_reward = self._episodic_reward(processed_prev_state, processed_state) * np.min( [np.max( [self._life_long_reward(), 1] ), self.L] )
+        intrinsic_reward = self._episodic_reward(processed_prev_state, processed_state) * np.min( [np.max( [self._life_long_reward(processed_state), 1] ), self.L] )
 
         return intrinsic_reward
     
@@ -246,14 +244,11 @@ class intrinsic_agent:
         Then with K-Nearest Neighbours we find the reward.
         """
 
-        last_state = np.expand_dims(last_state, axis=0)     # needed to expand dimension by extra batch dim to match network, maybe this can be the direction vector?
-        state = np.expand_dims(state, axis=0)
-
         embedded = self.embedding_network.predict([last_state, state])
-        logging.debug(f"INTRINSIC: embedded: {embedded}, with shape: {embedded.shape}")
+        logging.debug(f" output of embedded network for reward of state: {embedded}, with shape: {embedded.shape}")
 
         self.KNN_memory = np.vstack([self.KNN_memory, embedded])
-        logging.debug(f"INTRINSIC: KNN memory: {self.KNN_memory}\n")
+        logging.debug(f"KNN memory: {self.KNN_memory}\n")
         self.KNN.fit(self.KNN_memory)
 
         if len(self.KNN_memory) < self.k:
@@ -266,22 +261,55 @@ class intrinsic_agent:
         reward = 1 / ((np.mean(distances)) + 1e-8) 
         return reward
 
-
-    def _life_long_reward(self):
+    def _life_long_reward(self, state):
         """
         calculate the life-long (life = one episode) reward. 
 
+        We pass the state through our random network and predictor network. 
+        The random network returns a random collection of values, which the predictor network will try to match by minimizing the MSE.
+        Thus, for states that are visited often, the predictor network will be better at this prediction, resulting in a lower error. 
+
+        This error is scaled and returned as the life-long reward.
+
         TODO: implement
         """
+
+        random_output = self.LL_random_network(state)
+        predictor_output = self.LL_predictor_network(state)
+        logging.debug(f"Life-Long: calculated random and predictor output: \n random: {random_output} \n predictor: {predictor_output}")
+
         reward = 0
         return reward
+
+    def _preproc_obs(self, obs_space):
+        """
+        Preprocess the observation, which is now ('direction', 'image', 'mission') to something that can be embedded. 
+        TODO: how to include the direction vector. now we only take the image.
+        """
+
+        # ??? use one-hot encoder to expand the direction variable. now it is not just a single value (like: 1) but [0, 1, 0, 0]
+        direction = obs_space['direction']
+        onehot_encoded_dir = np.eye(4)[direction]
+
+        img = obs_space['image']
+        normalized_img = img / 255    # make sure values are between 0 and 1
+
+        # TODO how should we add the direction? Ideally the mission as well, but for our env that can be skipped as it is never changed.
+        #processed_obs = np.concatenate([onehot_encoded_dir, normalized_img])
+        #logging.debug(f"INTRINSIC AGENT: Processed observation {processed_obs}")
+
+        # temporary sol: just the image, expand with 1 dim for batch dimension for the networks
+        processed_obs = np.expand_dims(normalized_img, axis=0)
+        return processed_obs
 
 
 class DoWhaM_agent:
     """
-    DoWhaM additional reward.
+    DoWhaM additional reward modification.
 
     TODO:
+    now we evaluate action but should that not be state-action pair?
+
     reset method?
     """
 

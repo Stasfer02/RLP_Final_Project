@@ -18,7 +18,10 @@ from algorithms.NGU_system import NGU_env_wrapper
 from gymnasium.utils.env_checker import check_env
 
 def main():
-    logging.basicConfig(level=logging.DEBUG, format='%(message)s')
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format="%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S")
 
     # initialize instance of the environment for training and evaluation
     logging.info("Creating the environments ...")
@@ -28,11 +31,14 @@ def main():
 
     # wrap our training env with the NGU reward system, check the validity of the environment. 
     env_train = NGU_env_wrapper(env_train)
-    #check_env(env_train)
-    logging.info(f"Wrapped the training environment with NGU. Observation space: {env_train.observation_space}")
+    logging.debug(f"\n ----- obs space: {env_train.observation_space} \n --- action space: {env_train.action_space} \n \n ")
+    #check_env(env_train) -> this fails because there is randomness in the env (probably due to the NN's involved.)
+
+    logging.info(f"Wrapped the training environment with NGU.")
 
     # initialize the (multi-layered-perceptron) DQN agent, based on the wrapped env.
-    dqn_agent = DQN('MlpPolicy', env_train,learning_rate=0.001,verbose=0)
+    dqn_agent = DQN('MlpPolicy', env_train ,learning_rate=0.001,verbose=0)
+    logging.info(f"Successfully created the DQN agent.")
 
     # setup the evaluation callback with the normal env (not extended with NGU). 
     # taken from here: https://stable-baselines3.readthedocs.io/en/master/guide/callbacks.html
