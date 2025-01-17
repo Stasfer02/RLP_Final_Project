@@ -19,7 +19,9 @@ from minigrid.wrappers import FlatObsWrapper
 from stable_baselines3 import DQN
 from stable_baselines3.common.callbacks import EvalCallback
 from stable_baselines3.common.evaluation import evaluate_policy
-from algorithms.NGU_system import NGU_env_wrapper
+
+from algorithms.NGU_system import NGU_env_wrapper, DoWhaM_agent
+
 from gymnasium.utils.env_checker import check_env
 
 def main():
@@ -38,15 +40,14 @@ def main():
     env_eval = FlatObsWrapper(env_eval)
 
     # wrap our training env with the NGU reward system, check the validity of the environment.
-    """
     logging.info("Wrapping training env with NGU system ...")
     env_train = NGU_env_wrapper(env_train)
     logging.debug(f"\n --- obs space: {env_train.observation_space} \n --- action space: {env_train.action_space}")
     #check_env(env_train) -> this fails because there is randomness in the env (probably due to the NN's involved.)
-    """
+    
 
-    data_rewards = []      # 2D array
 
+    data_rewards = []      # 2D array of rewards over the multiple runs
     for i in range(0,5):
         # initialize the DQN agent for 5 seperate runs.
         dqn_agent = DQN('MlpPolicy', env_train ,learning_rate=0.0001,verbose=0)
@@ -61,7 +62,7 @@ def main():
     
     means, stds = utils.calculate_means_stds(data_rewards)
 
-    utils.create_plot(means, stds, f"{os.path.dirname(__file__)}/data/SB3_Empty_LR0_001.png")
+    utils.create_plot(means, stds, f"{os.path.dirname(__file__)}/data/DQN_DoWhaM_Empty_LR0_0001.png")
 
 if __name__ == "__main__":
     main()

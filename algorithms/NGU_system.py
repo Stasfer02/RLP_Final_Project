@@ -95,11 +95,11 @@ class NGU_env_wrapper(gym.Wrapper):
         next_state, extrinsic_reward, terminated, truncated, info = self.env.step(action)
 
         # get the intrinsic and DoWhaM rewards
-        intrinsic_reward = self.intrinsic_agent.get_reward(self.previous_state, next_state)
+        #intrinsic_reward = self.intrinsic_agent.get_reward(self.previous_state, next_state)
         DoWhaM_reward = self.DoWhaM_agent.get_reward(self.previous_state, action, next_state)
-
         # calculate the total reward
-        total_reward = extrinsic_reward + self.beta * intrinsic_reward + DoWhaM_reward
+        # total_reward = extrinsic_reward + self.beta * intrinsic_reward + DoWhaM_reward
+        total_reward = extrinsic_reward + DoWhaM_reward
 
         # set the previous state to this state for next step, needed for DoWham
         self.previous_state = next_state
@@ -344,7 +344,7 @@ class DoWhaM_agent:
         action_count = self._get_action_count(action)
         action_effect = self._get_action_effect(action)
 
-        if state['direction'] == next_state['direction'] and np.array_equal(state['image'], next_state['image']):
+        if np.array_equal(state, next_state):
             # the state has not been changed, so reward is 0
             return 0
         else:
