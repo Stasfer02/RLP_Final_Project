@@ -58,16 +58,16 @@ class NGU_env_wrapper(gym.Wrapper):
     Wrapper class for a(ny) gymnasium environment to add the NGU reward system.
     Initially built on the "Simple" and "dynamic-obstacles" environments.
     """
-    def __init__(self, env: gym.Env[ObsType, ActType], beta:float =0.001, eta:float = 40, L:float = 5.0, k:int = 10):
+    def __init__(self, env: gym.Env[ObsType, ActType], beta:float =0.3, eta:float = 40, L:float = 5.0, k:int = 10):
         """
         initialize the wrapper.
         
         The arguments are:
         env: The Gymnasium environment.
-        beta: the meta-controller to balance extrinsic and intrinsic rewards.
-        eta: the decay rate for the DoWhaM reward.
-        L: reward scaling factor: for scaling the life-long novelty reward and the episodic reward. standard value = 5 (as mentioned in the paper)
-        k: amount of k-nearest neighbours for the embedding network.
+        beta: the meta-controller to balance extrinsic and intrinsic rewards.                               value of 0.3 is taken directly from the paper
+        eta: the decay rate for the DoWhaM reward.                                                          value of 40 is taken directly from the paper
+        L: reward scaling factor: for scaling the life-long novelty reward and the episodic reward.         value of 5 is taken directly from the paper
+        k: amount of k-nearest neighbours for the embedding network.                                        value of 10 is taken directly from the paper 
         """
         super().__init__(env)
         self.beta = beta
@@ -116,7 +116,18 @@ class NGU_env_wrapper(gym.Wrapper):
         # when resetting (= initializing) the env. Update the previous state for DoWhaM
         self.previous_state = observation
 
+        # TODO: when we start training
+        # The game is started, so clear the KNN-memory and DoWhaM memory (and reset networks?)
+
         return observation, info
+    
+    def _preproc_observation(self, observation):
+        """
+        TODO
+        how to preprocess the observations for SB3 usage. 
+        Afterwards, go through intrinsic and DoWhaM code to make sure these work as well with the newly formatted obs-type.
+        """
+        pass
 
 
 class intrinsic_agent:
@@ -124,23 +135,19 @@ class intrinsic_agent:
     agent for calculating the intrinsic reward
 
     TODO:
-    - We need to preprocess the observation to a format that can be handled by the embedding network. The format also needs to be specified and forwarded on creation of the embedding network.
     - implement the life-long module
     """
     
     def __init__(self, L: float, k: int, obs_space, action_space):
         """
-        initialize with the alfa (scaling factor for similarity) parameter.
         L is the scaling factor for the life-long reward.
         k is the amount of nearest neighbours
 
-        TODO:
-        input/output shapes for the embedding network? how to implement.
         """
         self.L = L
         self.k = k
 
-        # TODO what will the input- and output shape be based on the obs_space? we later need to preprocess these
+        # TODO what will the input- and output shape be based on the newly formed, preprocessed obs_space?
         input_shape = (7,7,3)
 
         # life-long module, random and predictor networks
@@ -227,6 +234,8 @@ class intrinsic_agent:
         """
         calculate the intrinsic reward for some action.
         The episodic reward is scaled based on the life-long reward. as read in chapter 2 of the paper.
+        
+        The life-long reward is min/max scaled between 1 and hyperparameter L
         """
 
         processed_state = self._preproc_obs(state)
