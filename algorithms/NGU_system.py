@@ -75,6 +75,7 @@ class NGU_env_wrapper(gym.Wrapper):
         # keep track of previous state for DoWhaM
         self.previous_state = None
 
+        logging.info(f"NGU hyperparameters: beta={beta}, eta={eta}, L={L}, k={k}")
         # initialize the additional reward agents with the hyperparameters.
         # to the intrinsic agent, we pass alpha, L and the observation- and action spaces.
         self.intrinsic_agent = intrinsic_agent(L, k, env.observation_space, env.action_space)

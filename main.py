@@ -44,8 +44,6 @@ def main():
     env_train = NGU_env_wrapper(env_train)
     logging.debug(f"\n --- obs space: {env_train.observation_space} \n --- action space: {env_train.action_space}")
     #check_env(env_train) -> this fails because there is randomness in the env (probably due to the NN's involved.)
-    
-
 
     data_rewards = []      # 2D array of rewards over the multiple runs
     for i in range(0,5):
