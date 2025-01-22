@@ -58,7 +58,7 @@ class NGU_env_wrapper(gym.Wrapper):
     Wrapper class for a(ny) gymnasium environment to add the NGU reward system.
     Initially built on the "Simple" and "dynamic-obstacles" environments.
     """
-    def __init__(self, env: gym.Env[ObsType, ActType], beta:float =0.3, eta:float = 40, L:float = 5.0, k:int = 10):
+    def __init__(self, env: gym.Env[ObsType, ActType], beta:float =0.3, L:float = 5.0, k:int = 10, eta:float = 40):
         """
         initialize the wrapper.
         
@@ -78,7 +78,7 @@ class NGU_env_wrapper(gym.Wrapper):
         logging.info(f"NGU hyperparameters: beta={beta}, eta={eta}, L={L}, k={k}")
         # initialize the additional reward agents with the hyperparameters.
         # to the intrinsic agent, we pass alpha, L and the observation- and action spaces.
-        self.intrinsic_agent = intrinsic_agent(L, k, env.observation_space, env.action_space)
+        #self.intrinsic_agent = intrinsic_agent(L, k, env.observation_space, env.action_space)
         self.DoWhaM_agent = DoWhaM_agent(eta)
 
     def step(self, action: WrapperActType) -> tuple[WrapperObsType, SupportsFloat, bool, bool, dict[str, Any]]:
@@ -149,11 +149,14 @@ class intrinsic_agent:
         self.k = k
 
         # TODO what will the input- and output shape be based on the newly formed, preprocessed obs_space?
-        input_shape = (7,7,3)
+        input_shape = obs_space.shape
 
         # life-long module, random and predictor networks
         self.LL_random_network = self._create_LL_network(input_shape, 64)
         self.LL_predictor_network = self._create_LL_network(input_shape, 64)
+        self.LL_running_mean = 0
+        self.LL_running_std = 1
+        self.LL_beta = 0.99  # Decay factor for running mean and std
 
         # episodic module, embedding network
         self.embedding_network = self._create_embedding_network(input_shape, action_space.n)
@@ -176,9 +179,9 @@ class intrinsic_agent:
             inputs = layers.Input(shape= input_shape)
             logging.debug(f"{inputs.shape} siamese network: input dimensions")
 
-            x = layers.Conv2D(32, kernel_size= 3, strides= 2, activation='relu',padding='same')(inputs)
-            x = layers.Conv2D(64, kernel_size= 2, strides= 1, activation='relu')(x)
-            x = layers.Conv2D(64, kernel_size= 2, strides= 1, activation='relu')(x)
+            x = layers.Conv1D(32, kernel_size= 3, strides= 2, activation='relu',padding='same')(inputs)
+            x = layers.Conv1D(64, kernel_size= 2, strides= 1, activation='relu')(x)
+            x = layers.Conv1D(64, kernel_size= 2, strides= 1, activation='relu')(x)
 
             # now flatten the 3D vector into 1D for the fully connected layer
             x = layers.Flatten()(x)
@@ -188,8 +191,8 @@ class intrinsic_agent:
             return models.Model(inputs, x)
 
         # the input for the siamese components are 2 similar inputs for t and t +1
-        input_A = layers.Input(input_shape)
-        input_B = layers.Input(input_shape)
+        input_A = layers.Input(input_shape[0],1)
+        input_B = layers.Input(input_shape[0],1)
 
         # create the siamese networks
         siamese_A = create_partial_network(input_shape)         # for state at timestep t
@@ -219,10 +222,10 @@ class intrinsic_agent:
         """
         logging.info("Creating the Life-Long random network...")
 
-        input = layers.Input(shape=input_shape)
-        x = layers.Conv2D(32, kernel_size= 3, strides= 2, activation='linear')(input)
-        x = layers.Conv2D(64, kernel_size= 2, strides= 1, activation='relu')(x)
-        x = layers.Conv2D(64, kernel_size= 2, strides= 1, activation='relu')(x)
+        input = layers.Input(shape=(input_shape[0],1))
+        x = layers.Conv1D(32, kernel_size= 3, strides= 2, activation='linear')(input)
+        x = layers.Conv1D(64, kernel_size= 2, strides= 1, activation='relu')(x)
+        x = layers.Conv1D(64, kernel_size= 2, strides= 1, activation='relu')(x)
         x = layers.Flatten()(x)
         x = layers.Dense(128, activation='relu')(x)
 
@@ -239,9 +242,7 @@ class intrinsic_agent:
         The life-long reward is min/max scaled between 1 and hyperparameter L
         """
 
-        processed_state = self._preproc_obs(state)
-        processed_prev_state = self._preproc_obs(previous_state)
-        intrinsic_reward = self._episodic_reward(processed_prev_state, processed_state) * np.min( [np.max( [self._life_long_reward(processed_state), 1] ), self.L] )
+        intrinsic_reward = self._episodic_reward(previous_state, state) * np.min( [np.max( [self._life_long_reward(state), 1] ), self.L] )
 
         return intrinsic_reward
     
@@ -286,31 +287,13 @@ class intrinsic_agent:
 
         random_output = self.LL_random_network(state)
         predictor_output = self.LL_predictor_network(state)
+
+        error = np.mean(np.square(random_output - predictor_output)) # ||g_hat(x_t) - g(x_t)||^2
+
         logging.debug(f"Life-Long: calculated random and predictor output: \n random: {random_output} \n predictor: {predictor_output}")
 
         reward = 0
         return reward
-
-    def _preproc_obs(self, obs_space):
-        """
-        Preprocess the observation, which is now ('direction', 'image', 'mission') to something that can be embedded. 
-        TODO: how to include the direction vector. now we only take the image.
-        """
-
-        # ??? use one-hot encoder to expand the direction variable. now it is not just a single value (like: 1) but [0, 1, 0, 0]
-        direction = obs_space['direction']
-        onehot_encoded_dir = np.eye(4)[direction]
-
-        img = obs_space['image']
-        normalized_img = img / 255    # make sure values are between 0 and 1
-
-        # TODO how should we add the direction? Ideally the mission as well, but for our env that can be skipped as it is never changed.
-        #processed_obs = np.concatenate([onehot_encoded_dir, normalized_img])
-        #logging.debug(f"INTRINSIC AGENT: Processed observation {processed_obs}")
-
-        # temporary sol: just the image, expand with 1 dim for batch dimension for the networks
-        processed_obs = np.expand_dims(normalized_img, axis=0)
-        return processed_obs
 
 
 class DoWhaM_agent:

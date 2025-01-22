@@ -9,6 +9,8 @@ from stable_baselines3.common.callbacks import BaseCallback
 import numpy as np
 import matplotlib.pyplot as plt
 
+from scipy.ndimage import gaussian_filter1d
+
 class CustomCallback(BaseCallback):
     def __init__(self):
         """
@@ -63,6 +65,9 @@ def calculate_means_stds(data_rewards):
 
 def create_plot(means, stds, storage_path) -> None:
     x_values = np.arange(len(means))
+
+    # apply smoothening
+    means = gaussian_filter1d(means, sigma=2)
 
     plt.figure(figsize=(20,10))
     plt.plot(x_values, means,color="blue",linewidth= 0.5, label="Mean reward")
