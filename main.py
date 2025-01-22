@@ -6,6 +6,7 @@ HALLOO
 Here, we initialize the (wrapped) Environment, DQN agent and perform the training loop.
 """
 import os
+from random import gauss
 import numpy as np
 import logging
 
@@ -43,7 +44,7 @@ def main():
     """
     # wrap our training env with the NGU reward system, check the validity of the environment.
     logging.info("Wrapping training env with NGU system ...")
-    env_train_1 = NGU_env_wrapper(env_base, eta=35)
+    env_train_1 = NGU_env_wrapper(env_base, eta=40)
 
     data_rewards = []      # 2D array of rewards over the multiple runs
     for i in range(0,5):
@@ -82,10 +83,10 @@ def main():
     means_2, stds_2 = utils.calculate_means_stds(data_rewards)
 
     """
-    third run with eta = 50
+    third run with eta = 20
     """
     logging.info("Wrapping training env with NGU system ...")
-    env_train_3 = NGU_env_wrapper(env_base, eta=25)
+    env_train_3 = NGU_env_wrapper(env_base, eta=20)
     data_rewards = []      # 2D array of rewards over the multiple runs
     for i in range(0,5):
         # initialize the DQN agent for 5 seperate runs.
@@ -100,32 +101,61 @@ def main():
         data_rewards.append(rewards)
     
     means_3, stds_3 = utils.calculate_means_stds(data_rewards)
+
+
+    """
+    fourth run with eta = 50
+    """
+    logging.info("Wrapping training env with NGU system ...")
+    env_train_4 = NGU_env_wrapper(env_base, eta=50)
+    data_rewards = []      # 2D array of rewards over the multiple runs
+    for i in range(0,5):
+        # initialize the DQN agent for 5 seperate runs.
+        dqn_agent = DQN('MlpPolicy', env_train_4 ,learning_rate=0.0001,verbose=0,seed=seeds[i])
+        logging.info(f"Successfully created DQN agent.")
+
+        custom_callback = utils.CustomCallback()
+        # let the DQN agent learn on the wrapped env, but use the custom callback (non-wrapped env) for evaluation
+        dqn_agent.learn(100000, callback=custom_callback)
+
+        rewards = custom_callback.get_results()
+        data_rewards.append(rewards)
+    
+    means_4, stds_4 = utils.calculate_means_stds(data_rewards)
     
     # plotting
     x_values_1 = np.arange(len(means_1))
     x_values_2 = np.arange(len(means_2))
     x_values_3 = np.arange(len(means_3))
+    x_values_4 = np.arange(len(means_4))
 
     # apply smoothening
     means_1 = gaussian_filter1d(np.array(means_1), sigma=5)
     means_2 = gaussian_filter1d(np.array(means_2), sigma=5)
     means_3 = gaussian_filter1d(np.array(means_3), sigma=5)
+    means_4 = gaussian_filter1d(np.array(means_4), sigma=5)
 
     plt.figure(figsize=(20,10))
     # line 1
-    plt.plot(x_values_1, means_1,color="blue",linewidth= 0.5, label="eta = 35")
-    plt.fill_between(x_values_1, means_1 - stds_1, means_1 + stds_1, color="blue", alpha= 0.15)
+    plt.plot(x_values_4, means_4,color="yellow",linewidth= 0.5, label="$\eta$ = 50")
+    plt.fill_between(x_values_4, means_4 - stds_4, means_4 + stds_4, color="yellow", alpha= 0.15)
     # line 2
-    plt.plot(x_values_2, means_2,color="red",linewidth= 0.5, label="eta = 30")
-    plt.fill_between(x_values_2, means_2 - stds_2, means_2 + stds_2, color="red", alpha= 0.15)
+    plt.plot(x_values_1, means_1,color="blue",linewidth= 0.5, label="$\eta$ = 40")
+    plt.fill_between(x_values_1, means_1 - stds_1, means_1 + stds_1, color="blue", alpha= 0.15)
     # line 3
-    plt.plot(x_values_3, means_3,color="green",linewidth= 0.5, label="eta = 25")
+    plt.plot(x_values_2, means_2,color="red",linewidth= 0.5, label="$\eta$ = 30")
+    plt.fill_between(x_values_2, means_2 - stds_2, means_2 + stds_2, color="red", alpha= 0.15)
+    # line 4
+    plt.plot(x_values_3, means_3,color="green",linewidth= 0.5, label="$\eta$ = 20")
     plt.fill_between(x_values_3, means_3 - stds_3, means_3 + stds_3, color="green", alpha= 0.15)
     
     plt.legend(fontsize= 20, loc="lower right")
     plt.xlabel(fontsize= 20, xlabel="Episodes")
     plt.ylabel(fontsize = 20, ylabel="Reward")
-    plt.savefig(f"{os.path.dirname(__file__)}/data/DQN_DoWhaM_Empty_etas3_seeds_LR0_0001.pdf")
+
+    plt.tick_params(axis='both', which='major', labelsize=20)
+
+    plt.savefig(f"{os.path.dirname(__file__)}/data/DQN_DoWhaM_Empty_etas4_seeds_LR0_0001.pdf")
     plt.close()
 
 if __name__ == "__main__":
