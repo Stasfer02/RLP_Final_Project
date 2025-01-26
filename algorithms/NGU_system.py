@@ -58,7 +58,7 @@ class NGU_env_wrapper(gym.Wrapper):
     Wrapper class for a(ny) gymnasium environment to add the NGU reward system.
     Initially built on the "Simple" and "dynamic-obstacles" environments.
     """
-    def __init__(self, env: gym.Env[ObsType, ActType], beta:float =0.3, L:float = 5.0, k:int = 10, eta:float = 40):
+    def __init__(self, env: gym.Env[ObsType, ActType], beta:float =0.3, L:float = 5.0, k:int = 10, eta:float = 30, useNGU:bool = True, useDoWhaM: bool= True):
         """
         initialize the wrapper.
         
@@ -72,14 +72,21 @@ class NGU_env_wrapper(gym.Wrapper):
         super().__init__(env)
         self.beta = beta
 
+        self.useNGU = useNGU
+        self.useDoWhaM = useDoWhaM
+
         # keep track of previous state for DoWhaM
         self.previous_state = None
+        self.extrinsic_reward = None
 
-        logging.info(f"NGU hyperparameters: beta={beta}, eta={eta}, L={L}, k={k}")
+        logging.info(f"NGU hyperparameters: beta={beta}, eta={eta}, L={L}, k={k}. init with NGU={useNGU} and DoWhaM={useDoWhaM}")
         # initialize the additional reward agents with the hyperparameters.
         # to the intrinsic agent, we pass alpha, L and the observation- and action spaces.
-        #self.intrinsic_agent = intrinsic_agent(L, k, env.observation_space, env.action_space)
-        self.DoWhaM_agent = DoWhaM_agent(eta)
+        if useNGU:
+            self.intrinsic_agent = intrinsic_agent(L, k, env.observation_space, env.action_space)
+        
+        if useDoWhaM:
+            self.DoWhaM_agent = DoWhaM_agent(eta)
 
     def step(self, action: WrapperActType) -> tuple[WrapperObsType, SupportsFloat, bool, bool, dict[str, Any]]:
         """
@@ -94,13 +101,25 @@ class NGU_env_wrapper(gym.Wrapper):
 
         # take a step in the environment adn store the returns
         next_state, extrinsic_reward, terminated, truncated, info = self.env.step(action)
-
+        
+        self.extrinsic_reward = extrinsic_reward
         # get the intrinsic and DoWhaM rewards
-        #intrinsic_reward = self.intrinsic_agent.get_reward(self.previous_state, next_state)
-        DoWhaM_reward = self.DoWhaM_agent.get_reward(self.previous_state, action, next_state)
+        if self.useNGU:
+            intrinsic_reward = self.intrinsic_agent.get_reward(self.previous_state, next_state)
+        
+        if self.useDoWhaM:
+            DoWhaM_reward = self.DoWhaM_agent.get_reward(self.previous_state, action, next_state)
+
         # calculate the total reward
-        # total_reward = extrinsic_reward + self.beta * intrinsic_reward + DoWhaM_reward
-        total_reward = extrinsic_reward + DoWhaM_reward
+        if self.useNGU and self.useDoWhaM:
+            # DQN + NGU + DoWhaM
+            total_reward = extrinsic_reward + self.beta * intrinsic_reward + DoWhaM_reward
+        elif self.useNGU and not self.useDoWhaM:
+            # DQN + NGU
+            total_reward = extrinsic_reward + self.beta *intrinsic_reward
+        else:
+            # DQN + DoWhaM
+            total_reward = extrinsic_reward + DoWhaM_reward
 
         # set the previous state to this state for next step, needed for DoWham
         self.previous_state = next_state
@@ -122,21 +141,18 @@ class NGU_env_wrapper(gym.Wrapper):
 
         return observation, info
     
-    def _preproc_observation(self, observation):
-        """
-        TODO
-        how to preprocess the observations for SB3 usage. 
-        Afterwards, go through intrinsic and DoWhaM code to make sure these work as well with the newly formatted obs-type.
-        """
-        pass
+    def get_extrinsic_reward(self):
+        return self.extrinsic_reward
 
 
 class intrinsic_agent:
     """
     agent for calculating the intrinsic reward
 
-    TODO:
-    - implement the life-long module
+    #TODO
+    HOW TO TRAIN THE NETWORKS? 
+    -> We need to backpropagate the action to the embedding network.
+    -> For the life-long predictor network, we need to backpropagate the error.
     """
     
     def __init__(self, L: float, k: int, obs_space, action_space):
@@ -154,6 +170,7 @@ class intrinsic_agent:
         # life-long module, random and predictor networks
         self.LL_random_network = self._create_LL_network(input_shape, 64)
         self.LL_predictor_network = self._create_LL_network(input_shape, 64)
+        self.LL_step_counter = 0
         self.LL_running_mean = 0
         self.LL_running_std = 1
         self.LL_beta = 0.99  # Decay factor for running mean and std
@@ -163,7 +180,7 @@ class intrinsic_agent:
 
         # episodic module, k-nearest neighbors memory storage
         self.KNN = NearestNeighbors(n_neighbors= self.k, algorithm= 'auto')
-        self.KNN_memory = np.empty(action_space.n,dtype=float)
+        self.KNN_memory = np.empty((0,action_space.n),dtype=float)
 
     def _create_embedding_network(self, input_shape, output_shape):
         """
@@ -176,7 +193,7 @@ class intrinsic_agent:
         def create_partial_network(input_shape):
             # create part of the siamese network (twice)
             
-            inputs = layers.Input(shape= input_shape)
+            inputs = layers.Input(shape= (input_shape[0],1))
             logging.debug(f"{inputs.shape} siamese network: input dimensions")
 
             x = layers.Conv1D(32, kernel_size= 3, strides= 2, activation='relu',padding='same')(inputs)
@@ -191,8 +208,8 @@ class intrinsic_agent:
             return models.Model(inputs, x)
 
         # the input for the siamese components are 2 similar inputs for t and t +1
-        input_A = layers.Input(input_shape[0],1)
-        input_B = layers.Input(input_shape[0],1)
+        input_A = layers.Input(shape=(input_shape[0],1))
+        input_B = layers.Input(shape=(input_shape[0],1))
 
         # create the siamese networks
         siamese_A = create_partial_network(input_shape)         # for state at timestep t
@@ -249,13 +266,14 @@ class intrinsic_agent:
     def _episodic_reward(self, last_state, state):
         """
         calculate the episodic reward using the embedding network and k-nearest neighbours.
-
-        TODO: implement
-        Here we need to map to our embedding network.
-        Then with K-Nearest Neighbours we find the reward.
         """
+        last_state = np.expand_dims(last_state,axis=-1)
+        last_state = np.expand_dims(last_state,axis=0)
 
-        embedded = self.embedding_network.predict([last_state, state])
+        state = np.expand_dims(state, axis=-1)
+        state = np.expand_dims(state, axis=0)
+
+        embedded = self.embedding_network.predict([last_state, state],verbose=0)
         logging.debug(f" output of embedded network for reward of state: {embedded}, with shape: {embedded.shape}")
 
         self.KNN_memory = np.vstack([self.KNN_memory, embedded])
@@ -282,8 +300,10 @@ class intrinsic_agent:
 
         This error is scaled and returned as the life-long reward.
 
-        TODO: implement
+        TODO: Update predictor network how?
         """
+        state = np.expand_dims(state, axis=-1)
+        state = np.expand_dims(state, axis=0)
 
         random_output = self.LL_random_network(state)
         predictor_output = self.LL_predictor_network(state)
@@ -292,18 +312,20 @@ class intrinsic_agent:
 
         logging.debug(f"Life-Long: calculated random and predictor output: \n random: {random_output} \n predictor: {predictor_output}")
 
-        reward = 0
+        # calculate & update the running mean and standard dev
+        self.LL_step_counter += 1
+        old_mean = self.LL_running_mean
+        self.LL_running_mean = (error - old_mean) / self.LL_step_counter
+        self.LL_running_std = self.LL_running_std + ((error - old_mean) * (error - self.LL_running_mean))
+
+        # calculate & return the reward
+        reward = 1 + ((error - self.LL_running_mean) / self.LL_running_std)
         return reward
 
 
 class DoWhaM_agent:
     """
     DoWhaM additional reward modification.
-
-    TODO:
-    now we evaluate action but should that not be state-action pair?
-
-    reset method?
     """
 
     def __init__(self, eta:float):

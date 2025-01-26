@@ -40,19 +40,19 @@ def main():
 
     seeds = [0,1,2,3,4]
     """
-    first run with eta = 40
+    first run with NGU system
     """
     # wrap our training env with the NGU reward system, check the validity of the environment.
     logging.info("Wrapping training env with NGU system ...")
-    env_train_1 = NGU_env_wrapper(env_base, eta=40)
+    env_train_1 = NGU_env_wrapper(env_base,beta=0.2, useNGU=True, useDoWhaM=False)
 
     data_rewards = []      # 2D array of rewards over the multiple runs
-    for i in range(0,5):
+    for i in range(0,2):
         # initialize the DQN agent for 5 seperate runs.
         dqn_agent = DQN('MlpPolicy', env_train_1 ,learning_rate=0.0001,verbose=0,seed=seeds[i])
-        logging.info(f"Successfully created DQN agent.")
+        logging.info(f"Successfully created DQN agent number {i}.")
 
-        custom_callback = utils.CustomCallback()
+        custom_callback = utils.CustomCallback_updated(env_train_1)
         # let the DQN agent learn on the wrapped env, but use the custom callback (non-wrapped env) for evaluation
         dqn_agent.learn(100000, callback=custom_callback)
 
@@ -60,20 +60,20 @@ def main():
         data_rewards.append(rewards)
     
     means_1, stds_1 = utils.calculate_means_stds(data_rewards)
-
+    
 
     """
-    second run with eta = 30
+    second run
     """
     logging.info("Wrapping training env with NGU system ...")
-    env_train_2 = NGU_env_wrapper(env_base, eta=30)
+    env_train_2 = NGU_env_wrapper(env_base,eta=40, useNGU=False, useDoWhaM=True)
     data_rewards = []      # 2D array of rewards over the multiple runs
-    for i in range(0,5):
+    for i in range(0,2):
         # initialize the DQN agent for 5 seperate runs.
         dqn_agent = DQN('MlpPolicy', env_train_2 ,learning_rate=0.0001,verbose=0,seed=seeds[i])
-        logging.info(f"Successfully created DQN agent.")
+        logging.info(f"Successfully created DQN agent number {i}.")
 
-        custom_callback = utils.CustomCallback()
+        custom_callback = utils.CustomCallback_updated(env_train_2)
         # let the DQN agent learn on the wrapped env, but use the custom callback (non-wrapped env) for evaluation
         dqn_agent.learn(100000, callback=custom_callback)
 
@@ -81,19 +81,19 @@ def main():
         data_rewards.append(rewards)
     
     means_2, stds_2 = utils.calculate_means_stds(data_rewards)
-
+    
     """
-    third run with eta = 20
+    third run 
     """
     logging.info("Wrapping training env with NGU system ...")
-    env_train_3 = NGU_env_wrapper(env_base, eta=20)
+    env_train_3 = NGU_env_wrapper(env_base, beta=0.4, useNGU=True, useDoWhaM=False)
     data_rewards = []      # 2D array of rewards over the multiple runs
-    for i in range(0,5):
+    for i in range(0,2):
         # initialize the DQN agent for 5 seperate runs.
         dqn_agent = DQN('MlpPolicy', env_train_3 ,learning_rate=0.0001,verbose=0,seed=seeds[i])
-        logging.info(f"Successfully created DQN agent.")
+        logging.info(f"Successfully created DQN agent number {i}.")
 
-        custom_callback = utils.CustomCallback()
+        custom_callback = utils.CustomCallback_updated(env_train_3)
         # let the DQN agent learn on the wrapped env, but use the custom callback (non-wrapped env) for evaluation
         dqn_agent.learn(100000, callback=custom_callback)
 
@@ -101,18 +101,18 @@ def main():
         data_rewards.append(rewards)
     
     means_3, stds_3 = utils.calculate_means_stds(data_rewards)
-
+    
 
     """
-    fourth run with eta = 50
+    fourth run: standard DQN
     """
-    logging.info("Wrapping training env with NGU system ...")
-    env_train_4 = NGU_env_wrapper(env_base, eta=50)
+    logging.info("Creating standard DQN without wrapping env")
+    env_train_4 = env_base
     data_rewards = []      # 2D array of rewards over the multiple runs
     for i in range(0,5):
         # initialize the DQN agent for 5 seperate runs.
         dqn_agent = DQN('MlpPolicy', env_train_4 ,learning_rate=0.0001,verbose=0,seed=seeds[i])
-        logging.info(f"Successfully created DQN agent.")
+        logging.info(f"Successfully created DQN agent number {i}.")
 
         custom_callback = utils.CustomCallback()
         # let the DQN agent learn on the wrapped env, but use the custom callback (non-wrapped env) for evaluation
@@ -137,16 +137,16 @@ def main():
 
     plt.figure(figsize=(20,10))
     # line 1
-    plt.plot(x_values_4, means_4,color="yellow",linewidth= 0.5, label="$\eta$ = 50")
-    plt.fill_between(x_values_4, means_4 - stds_4, means_4 + stds_4, color="yellow", alpha= 0.15)
+    plt.plot(x_values_4, means_4,color="blue",linewidth= 0.5, label="standard DQN")
+    plt.fill_between(x_values_4, means_4 - stds_4, means_4 + stds_4, color="blue", alpha= 0.15)
     # line 2
-    plt.plot(x_values_1, means_1,color="blue",linewidth= 0.5, label="$\eta$ = 40")
-    plt.fill_between(x_values_1, means_1 - stds_1, means_1 + stds_1, color="blue", alpha= 0.15)
+    plt.plot(x_values_1, means_1,color="red",linewidth= 0.5, label=r"DQN + NGU ($\beta$=0.2")
+    plt.fill_between(x_values_1, means_1 - stds_1, means_1 + stds_1, color="red", alpha= 0.15)
     # line 3
-    plt.plot(x_values_2, means_2,color="red",linewidth= 0.5, label="$\eta$ = 30")
+    plt.plot(x_values_2, means_2,color="red",linewidth= 0.5, label=r"DQN + NGU with $\beta$ = 0.3")
     plt.fill_between(x_values_2, means_2 - stds_2, means_2 + stds_2, color="red", alpha= 0.15)
     # line 4
-    plt.plot(x_values_3, means_3,color="green",linewidth= 0.5, label="$\eta$ = 20")
+    plt.plot(x_values_3, means_3,color="green",linewidth= 0.5, label=r"DQN + NGU with $\beta$ = 0.4")
     plt.fill_between(x_values_3, means_3 - stds_3, means_3 + stds_3, color="green", alpha= 0.15)
     
     plt.legend(fontsize= 20, loc="lower right")
@@ -155,7 +155,7 @@ def main():
 
     plt.tick_params(axis='both', which='major', labelsize=20)
 
-    plt.savefig(f"{os.path.dirname(__file__)}/data/DQN_DoWhaM_Empty_etas4_seeds_LR0_0001.pdf")
+    plt.savefig(f"{os.path.dirname(__file__)}/data/1M_doorkey_DQN_vs_DoWhaM_LR_0_0005.pdf")
     plt.close()
 
 if __name__ == "__main__":

@@ -5,11 +5,13 @@ We create a custom callback function to keep track of rewards/timesteps per run.
 """
 
 
+from re import S
 from stable_baselines3.common.callbacks import BaseCallback
 import numpy as np
 import matplotlib.pyplot as plt
-
+from algorithms.NGU_system import NGU_env_wrapper
 from scipy.ndimage import gaussian_filter1d
+import logging
 
 class CustomCallback(BaseCallback):
     def __init__(self):
@@ -25,7 +27,6 @@ class CustomCallback(BaseCallback):
         if "episode" in self.locals["infos"][0]:
 
             episode_reward = self.locals["infos"][0]["episode"]["r"]
-            
             # store in memory
             self.rewards.append(episode_reward)
 
@@ -33,7 +34,36 @@ class CustomCallback(BaseCallback):
     
     def get_results(self):
         return self.rewards
+
+class CustomCallback_updated(BaseCallback):
+    def __init__(self, NGU_system: NGU_env_wrapper):
+        """
+        initialize with memory for rewards and timesteps
+        """
+        super().__init__(verbose=0)
+        
+        self.NGU_system = NGU_system
+        self.rewards = []
+        self.timestep = 0
+        self.episode_cnt = 0
     
+    def _on_step(self) -> bool:
+        # Check if an episode has finished and get the reward and amount of timesteps
+        self.timestep += 1
+        if "episode" in self.locals["infos"][0]:
+
+            #episode_reward = self.locals["infos"][0]["episode"]["r"]
+            episode_reward = self.NGU_system.get_extrinsic_reward()
+            self.episode_cnt += 1
+            cnt = self.episode_cnt
+            logging.info(f"Episode {self.episode_cnt} \tfinished at timestep {self.timestep} \twith reward: {episode_reward}")
+            # store in memory
+            self.rewards.append(episode_reward)
+
+        return True  # Continue training
+    
+    def get_results(self):
+        return self.rewards
 
 def calculate_means_stds(data_rewards):
     """
